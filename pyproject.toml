@@ -32,20 +32,9 @@ dev = [
 requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-py-modules = [
-    "api",
-    "config",
-    "graph",
-    "incident_store",
-    "learning",
-    "main",
-    "rag",
-    "simulate_prod",
-    "state",
-    "telemetry",
-    "tools",
-]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autonomous_sre*"]
 
 [tool.pytest.ini_options]
 addopts = "-ra -q"

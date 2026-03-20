@@ -9,21 +9,38 @@ from __future__ import annotations
 
 import logging
 import uuid
-import sys
+import os
+import math
+import asyncio
+import time
+import numpy as np
 from typing import Any
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.errors import NodeInterrupt
 
-from state import AgentState, IncidentState, RemediationProposal, Severity
-from rag import KnowledgeBase
-from learning import LearningEngine, encode_state, ACTION_SPACE
-from tools import TOOL_DISPATCHER, ROLLBACK_DISPATCHER
-from config import settings
+from autonomous_sre.core.state import AgentState, IncidentState, RemediationProposal, Severity
+from autonomous_sre.services.rag import KnowledgeBase
+from autonomous_sre.services.learning import LearningEngine, encode_state
+from autonomous_sre.infrastructure.tools import TOOL_DISPATCHER, ROLLBACK_DISPATCHER
+from autonomous_sre.core.config import settings
+from autonomous_sre.infrastructure.persistence import get_db
+from autonomous_sre.infrastructure.audit import get_audit_logger
+from autonomous_sre.infrastructure.approval_bus import register_pending, pop_decision
 
 logger = logging.getLogger("sre_graph")
 logger.setLevel(logging.INFO)
+
+
+# ──────────────────────────────────────────────
+# Configuration
+# ──────────────────────────────────────────────
+
+# Human-in-the-loop confidence threshold (configurable via env var)
+# Default 0.60 for demo, 0.75 recommended for production
+HITL_THRESHOLD = float(os.getenv("HITL_THRESHOLD", "0.60"))
+API_MODE = os.getenv("API_MODE", "false").lower() == "true"
+logger.info(f"HITL_THRESHOLD set to {HITL_THRESHOLD:.2f} (set HITL_THRESHOLD env var to override)")
 
 
 # ──────────────────────────────────────────────
@@ -32,6 +49,8 @@ logger.setLevel(logging.INFO)
 
 kb = KnowledgeBase()
 engine = LearningEngine()
+db = get_db()
+audit_logger = get_audit_logger()
 
 
 # ──────────────────────────────────────────────
@@ -94,7 +113,18 @@ def analyzer_node(state: AgentState) -> dict[str, Any]:
     )
     
     logger.info(f"analyzer_node | Constructed IncidentState: severity={severity.value} on {service}")
-    return {"incident": incident}
+    
+    # Save incident to database
+    incident_id = db.save_incident(incident, service)
+    
+    # Log to audit trail
+    audit_logger.log_incident_detected(
+        incident_id=incident_id,
+        severity=severity.value,
+        summary=summary
+    )
+    
+    return {"incident": incident, "incident_id": incident_id}
 
 
 # ──────────────────────────────────────────────
@@ -173,7 +203,10 @@ def proposer_node(state: AgentState) -> dict[str, Any]:
     
     # ── Confidence & Rationale ──
     state_vec = encode_state(incident)
-    confidence = engine.get_confidence(state_vec, action)
+    # Sigmoid normalization instead of linear scaling
+    # Derives Q-value and applies sigmoid to normalize to (0, 1)
+    raw_max_q = float(np.max(engine._policy_weights @ state_vec))
+    confidence = 1.0 / (1.0 + math.exp(-raw_max_q * 3))
     
     rag_text = incident.rag_context[0][:120] + "..." if incident.rag_context else "No matching guides."
     
@@ -197,7 +230,21 @@ def proposer_node(state: AgentState) -> dict[str, Any]:
     )
     
     logger.info(f"proposer_node | Generated proposal. Confidence: {confidence:.2f}")
-    return {"proposal": proposal}
+    
+    # Save proposal to database (human_approved=None as it's pending)
+    incident_id = state.get("incident_id")
+    proposal_id = db.save_proposal(proposal, incident_id, approved=None, reward=0.0)
+    
+    # Log to audit trail
+    audit_logger.log_proposal_generated(
+        incident_id=incident_id,
+        proposal_id=proposal_id,
+        action=action,
+        confidence=confidence,
+        rationale=rationale
+    )
+    
+    return {"proposal": proposal, "proposal_id": proposal_id}
 
 
 # ──────────────────────────────────────────────
@@ -211,20 +258,37 @@ def human_in_the_loop_node(state: AgentState) -> dict[str, Any]:
     """
     proposal = state["proposal"]
     incident = state["incident"]
+    incident_id = state.get("incident_id")
+    proposal_id = state.get("proposal_id")
     assert proposal is not None and incident is not None
     
-    # ── Check if we are resuming from an interrupt ──
-    # The API will resume the thread by injecting `{ "human_approved": True/False }` into the state.
-    # On the FIRST pass, state["human_approved"] is None (or False if default), so we pause.
-    
-    # If this is the initial arrival at the node and confidence >= 0.75, we interrupt.
-    if (
-        proposal.confidence_score >= settings.approval_confidence_threshold
-        and state.get("human_approved") is None
-    ):
-        logger.info(f"human_in_the_loop_node | High confidence ({proposal.confidence_score:.2f}). Pausing for human approval via NodeInterrupt.")
-        # Pausing the graph to wait for API approval
-        raise NodeInterrupt("Requires human approval")
+    if proposal.confidence_score >= HITL_THRESHOLD and state.get("human_approved") is None:
+        if API_MODE and proposal_id:
+            logger.info(
+                "human_in_the_loop_node | API_MODE enabled; awaiting approval for proposal %s (timeout=300s)",
+                proposal_id,
+            )
+            event = register_pending(proposal_id)
+            try:
+                try:
+                    asyncio.get_running_loop()
+                    deadline = time.time() + 300
+                    while not event.is_set() and time.time() < deadline:
+                        time.sleep(0.25)
+                    if not event.is_set():
+                        raise TimeoutError
+                except RuntimeError:
+                    asyncio.run(asyncio.wait_for(event.wait(), timeout=300))
+                decision = pop_decision(proposal_id)
+                state["human_approved"] = bool(decision)
+            except TimeoutError:
+                logger.warning("human_in_the_loop_node | Approval wait timed out; escalating.")
+                pop_decision(proposal_id)
+                state["human_approved"] = False
+        else:
+            # CLI fallback mode for local runs without API
+            decision = input(f"Approve action '{proposal.action}'? [y/N]: ").strip().lower()
+            state["human_approved"] = decision in {"y", "yes"}
         
     logger.info("human_in_the_loop_node | Resuming execution and evaluating outcome.")
     reward = 0.0
@@ -233,7 +297,7 @@ def human_in_the_loop_node(state: AgentState) -> dict[str, Any]:
     s_vec = encode_state(incident)
     action_name = proposal.action
     
-    if proposal.confidence_score >= settings.approval_confidence_threshold:
+    if proposal.confidence_score >= HITL_THRESHOLD:
         # We are resuming from an interrupt. Check the injected state.
         human_approved = state.get("human_approved", False)
         
@@ -243,18 +307,74 @@ def human_in_the_loop_node(state: AgentState) -> dict[str, Any]:
             if tool_func:
                 tool_func(**proposal.action_params)
             reward = engine.calculate_reward("resolved", 1.0)
+            
+            # Log approval decision
+            audit_logger.log_approval_decision(
+                incident_id=incident_id,
+                proposal_id=proposal_id,
+                action=action_name,
+                approved=True,
+                rationale="Human approved the proposal via API"
+            )
+            
+            # Log action execution
+            audit_logger.log_action_execution(
+                incident_id=incident_id,
+                proposal_id=proposal_id,
+                action=action_name,
+                params=proposal.action_params,
+                rollback_action=proposal.rollback_action,
+                rollback_params=proposal.rollback_params
+            )
         else:
             logger.info("human_in_the_loop_node | Human REJECTED proposal via API.")
             reward = engine.calculate_reward("escalated", 0.0)
+            
+            # Log rejection decision
+            audit_logger.log_approval_decision(
+                incident_id=incident_id,
+                proposal_id=proposal_id,
+                action=action_name,
+                approved=False,
+                rationale="Human rejected the proposal via API"
+            )
+            
+            # Log escalation
+            audit_logger.log_escalation(
+                incident_id=incident_id,
+                proposal_id=proposal_id,
+                reason="Human rejected the proposal. Escalating to on-call team."
+            )
+        
+        # Update proposal in database with approval decision and reward
+        db.update_proposal_approval(proposal_id, human_approved, reward)
     else:
         # Low confidence -> Auto escalate immediately (no interrupt)
         logger.warning(f"human_in_the_loop_node | Low confidence ({proposal.confidence_score:.2f}). Auto-escalating.")
         human_approved = False
         reward = engine.calculate_reward("escalated", 0.5)
+        
+        # Log auto-escalation
+        audit_logger.log_escalation(
+            incident_id=incident_id,
+            proposal_id=proposal_id,
+            reason=f"Low confidence score ({proposal.confidence_score:.2f}) below threshold {HITL_THRESHOLD:.2f}. Auto-escalating."
+        )
+        
+        # Update proposal in database
+        db.update_proposal_approval(proposal_id, False, reward)
 
     # ── Continuous Learning Update ──
     s_next = s_vec * 0.0
     engine.store_experience(s_vec, action_name, reward, s_next)
+    
+    # Save experience to database
+    db.save_experience(s_vec, action_name, reward, s_next)
+    
+    # Save episode metric for learning curve
+    was_correct = (action_name != "no_action") if incident.severity != Severity.LOW else True
+    db.save_episode_metric(action_name, proposal.confidence_score, reward, was_correct)
+    
     engine.update_policy()
     
     return {"human_approved": human_approved, "reward_signal": reward}

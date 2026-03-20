@@ -1,226 +1,217 @@
 # Autonomous SRE Agent
 
-Open-source MVP of a LangGraph-orchestrated Site Reliability Engineering agent. It ingests telemetry (via webhooks), searches expert runbooks (RAG), predicts remediation actions via Reinforcement Learning (RL), and proposes fixes. It exposes a FastAPI backend where SRE teams can review and approve actions asynchronously.
+A production-oriented MVP for autonomous incident analysis and remediation using a layered architecture, LangGraph orchestration, RAG context retrieval, RL-based action selection, Human-in-the-Loop (HITL) approval, and full audit persistence.
 
-## MVP Scope
+## 1. Repository Structure
 
-This repository is intentionally MVP-oriented for open-source collaboration.
-
-- Includes: end-to-end incident workflow, approval gate, configurable thresholds, optional API key protection, health/readiness endpoints, and containerized runtime.
-- Excludes (for now): enterprise IAM integration, durable distributed checkpointing, real cloud/Kubernetes actuators, and full policy engine.
-- Safety posture: all infra tools are simulated stubs by default and should be replaced before real production actuation.
-
-## Architecture
-
-```
-Telemetry Stream (async)
-        │
-        ▼
-┌──────────────────────────────────────────────────────┐
-│                   LangGraph Pipeline                 │
-│                                                      │
-│  ┌──────────┐    ┌────────────┐    ┌───────────┐     │
-│  │ Analyzer │───►│ Researcher │───►│ Predictor │     │
-│  └──────────┘    │  (RAG)     │    │  (RL)     │     │
-│       │          └────────────┘    └─────┬─────┘     │
-│       │ (LOW severity skip)              │           │
-│       └──────────────┐                   │           │
-│                      ▼                   ▼           │
-│               ┌──────────┐               |           │
-│               │ Proposer │◄──────────────┘           |
-│               └────┬─────┘                           │
-│                    ▼                                 │
-│          ┌──────────────────┐                        │
-│          │ Human-in-the-Loop│◄── (FastAPI Checkpoint)│
-│          │   (API Pause)    │                        │
-│          └─────────┬────────┘                        │
-│                    ▼                                 │
-│              ┌────────────┐                          │
-│              │ Actuators  │                          │
-│              │ (Tools)    │                          │
-│              └────────────┘                          │
-└──────────────────────────────────────────────────────┘
-        │
-        ▼
-  ServiceControlTool
-  (Scale / Restart / Rollback)
+```text
+autonomous_sre/
+├── autonomous_sre/
+│   ├── core/
+│   │   ├── config.py            # Runtime and model configuration
+│   │   └── state.py             # Pydantic models and AgentState contract
+│   ├── services/
+│   │   ├── telemetry.py         # Multi-service telemetry simulation
+│   │   ├── rag.py               # Knowledge retrieval service (FAISS + embeddings)
+│   │   └── learning.py          # RL engine, warm start, policy persistence
+│   ├── infrastructure/
+│   │   ├── tools.py             # Idempotent remediation/rollback adapters
+│   │   ├── persistence.py       # SQLite persistence layer
+│   │   ├── audit.py             # Append-only JSONL audit logger
+│   │   ├── approval_bus.py      # In-memory proposal approval queue
+│   │   └── incident_store.py    # Thread-safe store abstraction (compat utility)
+│   ├── orchestration/
+│   │   └── graph.py             # LangGraph node pipeline and routing
+│   └── interfaces/
+│       ├── api.py               # FastAPI + dashboard endpoints
+│       ├── main.py              # CLI live run + warmup training
+│       ├── scenarios.py         # Deterministic scenario injection CLI
+│       └── simulate_prod.py     # Production-like traffic simulator
+├── dashboard/
+│   └── index.html               # Live dashboard UI
+├── tests/
+├── Dockerfile
+├── pyproject.toml
+└── README.md
 ```
 
-## Project Structure
+## 2. System Architecture (Layered)
 
-| File | Purpose |
-|---|---|
-| `main.py` | Entry point — boots simulator, runs the graph, displays results |
-| `state.py` | Pydantic data models (`TelemetryEvent`, `IncidentState`, `RemediationProposal`, `AgentState`) |
-| `graph.py` | LangGraph `StateGraph` with 5 nodes and conditional routing |
-| `rag.py` | RAG engine backed by FAISS with synthetic expert guides |
-| `learning.py` | RL scaffolding — `LearningEngine`, `ReplayBuffer`, `Experience` |
-| `tools.py` | Simulated `ServiceControlTool`├── Pyproject.toml     # Packaging and metadata
-├── Dockerfile         # Production container
-├── docker-compose.yml 
-├── .env.example       # API Keys
-├── graph.py           # LangGraph orchestration
-├── api.py             # FastAPI backend (Webhooks & HitL)
-├── learning.py        # Reinforcement Learning logic
-├── state.py           # Pydantic schemas and AgentState
-├── rag.py             # FAISS Retrieval-Augmented Generation
-├── tools.py           # Idempotent infrastructure actuators
-└── telemetry.py       # Metrics Simulator / Payload schemas
-```
+### 2.1 Core Layer
+- Defines the canonical domain model and configuration contract.
+- No infrastructure side-effects.
+- Files:
+    - `autonomous_sre/core/state.py`
+    - `autonomous_sre/core/config.py`
 
-## Setup & Running
+### 2.2 Service Layer
+- Stateless/algorithmic processing services.
+- Files:
+    - `autonomous_sre/services/telemetry.py`
+    - `autonomous_sre/services/rag.py`
+    - `autonomous_sre/services/learning.py`
 
-You can run the Agent either natively via Python or via Docker.
+### 2.3 Infrastructure Layer
+- Side-effecting adapters: storage, audit, and action execution.
+- Files:
+    - `autonomous_sre/infrastructure/persistence.py`
+    - `autonomous_sre/infrastructure/audit.py`
+    - `autonomous_sre/infrastructure/tools.py`
+    - `autonomous_sre/infrastructure/approval_bus.py`
 
-### Option 1: Docker (Recommended)
-```bash
-docker-compose up --build
-```
+### 2.4 Orchestration Layer
+- Business workflow and control flow.
+- LangGraph nodes, confidence gating, HITL, routing, reward updates.
+- File:
+    - `autonomous_sre/orchestration/graph.py`
 
-### Option 1b: Docker (Production-like Compose)
-```bash
-cp .env.example .env
-# set API_KEY and OPENAI_API_KEY in .env
-docker-compose -f docker-compose.prod.yml up --build
-```
+### 2.5 Interface Layer
+- Operator-facing and integration-facing entry points.
+- Files:
+    - `autonomous_sre/interfaces/api.py`
+    - `autonomous_sre/interfaces/main.py`
+    - `autonomous_sre/interfaces/scenarios.py`
+    - `autonomous_sre/interfaces/simulate_prod.py`
 
-### Option 2: Native Python
-1. Clone the repository and install dependencies:
+## 3. Runtime Flow
+
+1. Telemetry collected/injected.
+2. Analyzer detects anomaly and severity.
+3. Researcher enriches context using RAG.
+4. RL predictor proposes remediation action.
+5. Proposer computes confidence and rollback plan.
+6. HITL decides approve/reject/escalate.
+7. Tool executes or escalates.
+8. Experience, metrics, and audit are persisted.
+9. Policy updates and weights are saved.
+
+## 4. Quick Start
+
+### 4.1 Install
+
 ```bash
 pip install -r requirements.txt
-# For contributor workflow (tests + formatting tools):
-pip install -e .[dev]
-```
-2. Start the API Server:
-```bash
-uvicorn api:app --reload --port 8000
 ```
 
-### Run Tests
-```bash
-pytest -q
-```
-
-## Simulate Production Locally
-
-Use the included simulator to generate sustained webhook traffic and auto-process approvals.
+### 4.2 CLI Run
 
 ```bash
-# 1) Start API first
-uvicorn api:app --reload --port 8000
-
-# 2) In another terminal, run a normal traffic simulation
-python simulate_prod.py --duration 60 --rps 2
-
-# 3) Run an incident storm (more severe traffic)
-python simulate_prod.py --duration 60 --rps 5 --spike-mode
+python -m autonomous_sre.interfaces.main
 ```
 
-If API key auth is enabled, include `--api-key <your-key>` in simulator commands.
+### 4.3 API + Dashboard
 
-For teammate-scoped PR tasks, see `TEAM_PR_MODULES.md`.
-
-## Ollama Setup (for Production-Grade Embeddings)
-
-The system uses **Ollama** for local, self-hosted text embeddings. This is free, requires no API keys, and keeps your data local.
-
-### Install Ollama
-
-1. Download and install [Ollama](https://ollama.ai/) for your OS.
-
-2. Start the Ollama server in a terminal:
 ```bash
-ollama serve
+uvicorn autonomous_sre.interfaces.api:app --host 127.0.0.1 --port 8000
 ```
 
-3. In another terminal, pull the embedding model (one-time setup):
+Open:
+- `http://127.0.0.1:8000`
+
+### 4.4 Scenario Injection
+
 ```bash
-ollama pull nomic-embed-text
+python -m autonomous_sre.interfaces.scenarios --scenario cpu_spike
+python -m autonomous_sre.interfaces.scenarios --scenario memory_leak --runs 10
 ```
 
-The embedding model will be downloaded (~274MB) and cached locally.
+### 4.5 Docker (Single File)
 
-### Alternative: Run Ollama in Docker
+Build image:
 
-Add to your `docker-compose.yml` (already included in dev setup if you want to use it):
-```yaml
-ollama:
-  image: ollama/ollama:latest
-  ports:
-    - "11434:11434"
-  volumes:
-    - ollama:/root/.ollama
-volumes:
-  ollama:
-```
-
-Then start both services:
 ```bash
-docker-compose up sre-agent ollama
+docker build -t autonomous-sre:latest .
 ```
 
-### Configuration
+Run container:
 
-The RAG system will automatically:
-- ✅ Detect if Ollama is running and use it for embeddings
-- ✅ Fall back to random embeddings (FakeEmbeddings) if Ollama is unavailable (for testing/CI)
-
-To use a different Ollama model, set in `.env`:
 ```bash
-OLLAMA_MODEL=llama2
-OLLAMA_BASE_URL=http://localhost:11434
+docker run --rm -p 8000:8000 --name autonomous-sre autonomous-sre:latest
 ```
 
-Available models: `nomic-embed-text` (faster, recommended), `all-minilm`, `mxbai-embed-large`, etc.
+Open:
+- `http://127.0.0.1:8000`
 
+## 5. Production Integration Guide
 
-1. **Trigger an Incident:** Submitting a webhook (e.g., from Datadog) starts a background LangGraph thread.
-```bash
-curl -X POST http://localhost:8000/webhook/alert -H "Content-Type: application/json" -d '{"service":"api-gateway", "alert_name":"HighLatency", "severity":"critical", "metrics":{"latency_ms": 3500}}'
-```
+### 5.1 Replace Simulated Telemetry
+- Replace simulator input with real telemetry/webhook ingestion.
+- Change in:
+    - `autonomous_sre/interfaces/api.py` (triggering and ingestion APIs)
+    - `autonomous_sre/services/telemetry.py` (if simulator retained for fallback)
 
-If `API_KEY_ENABLED=true`, include the header `x-api-key`:
-```bash
-curl -X POST http://localhost:8000/webhook/alert \
-        -H "Content-Type: application/json" \
-        -H "x-api-key: <your-api-key>" \
-        -d '{"service":"api-gateway", "alert_name":"HighLatency", "severity":"critical", "metrics":{"latency_ms": 3500}}'
-```
+### 5.2 Replace Simulated Actuators
+- Replace stub actions in `tools.py` with real infrastructure SDK/CLI calls.
+- Change in:
+    - `autonomous_sre/infrastructure/tools.py`
 
-2. **Check Pending Approvals:** The graph will pause and wait for human permission.
-```bash
-curl http://localhost:8000/api/incidents/pending
-```
+### 5.3 Persistence Hardening
+- Move SQLite to PostgreSQL for multi-instance deployment.
+- Change in:
+    - `autonomous_sre/infrastructure/persistence.py`
 
-3. **Approve or Reject:** Resume the thread using the `thread_id` returned in the pending list.
-```bash
-curl -X POST http://localhost:8000/api/incidents/<THREAD_ID>/approve
-```
+### 5.4 Security Hardening
+- Add authn/authz to mutation endpoints.
+- Change in:
+    - `autonomous_sre/interfaces/api.py`
+- Externalize secrets/env config.
+- Change in:
+    - `autonomous_sre/core/config.py`
 
-## API Health Endpoints
+### 5.5 Model/RAG Upgrades
+- Swap fake/local embeddings to enterprise embeddings provider.
+- Change in:
+    - `autonomous_sre/services/rag.py`
+- Upgrade linear Q to deep RL (e.g., DQN).
+- Change in:
+    - `autonomous_sre/services/learning.py`
 
-- `GET /healthz`: liveness probe
-- `GET /readyz`: readiness probe with MVP checks
+## 6. Replication and Scaling
 
-## Environment Configuration
+### 6.1 Single-Node Demo (Current)
+- In-memory approval queue (`approval_bus.py`).
+- SQLite persistence (`sre_agent.db`).
 
-Use `.env.example` as a template. Key fields:
+### 6.2 Multi-Instance Production
+- Replace in-memory approval queue with Redis/Kafka-backed coordination.
+- Replace SQLite with managed Postgres.
+- Use centralized log sink for `audit.log` shipping.
+- Run API behind a load balancer.
+- Persist graph checkpoints in shared durable store if required.
 
-- `ENVIRONMENT`: `dev` or `prod`
-- `LOG_LEVEL`: `INFO`, `DEBUG`, etc.
-- `API_KEY_ENABLED`: `true` to protect write endpoints
-- `API_KEY`: shared secret used when API key auth is enabled
-- `ANOMALY_*`, `RL_*`, and `APPROVAL_CONFIDENCE_THRESHOLD`: model and decision tuning knobs
+## 7. Change Map: Where to Modify What
 
-## Tech Stack
+- Detection threshold logic:
+    - `autonomous_sre/orchestration/graph.py` (analyzer node)
+    - `autonomous_sre/core/config.py` (threshold values)
+- RL action space, rewards, exploration:
+    - `autonomous_sre/services/learning.py`
+- HITL threshold and behavior:
+    - `autonomous_sre/orchestration/graph.py`
+    - env var `HITL_THRESHOLD`
+- API contracts/endpoints:
+    - `autonomous_sre/interfaces/api.py`
+- Dashboard behavior/refresh/layout:
+    - `dashboard/index.html`
+- Database schema and reporting:
+    - `autonomous_sre/infrastructure/persistence.py`
+- Audit schema and compliance event payloads:
+    - `autonomous_sre/infrastructure/audit.py`
+- Tool execution and rollback logic:
+    - `autonomous_sre/infrastructure/tools.py`
 
-- **Python 3.10+** with `asyncio`
-- **LangGraph** / **LangChain** for agentic orchestration
-- **FAISS** for local vector search (RAG)
-- **Ollama** for local, self-hosted text embeddings (production-grade)
-- **Pydantic v2** for data validation
-- **NumPy** for RL state encoding
+## 8. Operational Artifacts
 
-## License
+Runtime-generated files:
+- `sre_agent.db`
+- `sre_policy_weights.npy`
+- `audit.log`
 
-MIT
+## 9. Environment Parameters
+
+Important runtime controls:
+- `HITL_THRESHOLD` (default `0.60` demo; `0.75` production suggestion)
+- `API_MODE` (enabled automatically by API interface)
+
+Additional parameters are in:
+- `autonomous_sre/core/config.py`

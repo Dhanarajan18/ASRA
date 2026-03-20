@@ -77,9 +77,9 @@ def run_simulation(
         payload = _build_payload(spike_mode=spike_mode)
         stats.sent += 1
         try:
+            # Trigger a synthetic run through the new API contract.
             resp = requests.post(
-                f"{base_url}/webhook/alert",
-                json=payload,
+                f"{base_url}/trigger",
                 headers=_headers(api_key),
                 timeout=3,
             )
@@ -94,8 +94,8 @@ def run_simulation(
         elapsed = time.monotonic() - started
         if int(elapsed) % 1 == 0:
             try:
-                pending = requests.get(f"{base_url}/api/incidents/pending", timeout=3).json()
-                incidents: dict = pending.get("incidents", {})
+                pending = requests.get(f"{base_url}/proposals/pending", timeout=3).json()
+                incidents = {row["id"]: row for row in pending}
                 stats.pending_seen += len(incidents)
 
                 for thread_id in list(incidents.keys()):
@@ -109,7 +109,7 @@ def run_simulation(
 
                     try:
                         requests.post(
-                            f"{base_url}/api/incidents/{thread_id}/{action}",
+                            f"{base_url}/proposals/{thread_id}/{action}",
                             headers=_headers(api_key),
                             timeout=3,
                         )

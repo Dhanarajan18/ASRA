@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import simulate_prod
+from autonomous_sre.interfaces import simulate_prod
 
 
 def test_build_payload_shape():

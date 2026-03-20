@@ -40,7 +40,9 @@ class AgentState(TypedDict):
     """The global state object passed through the LangGraph pipeline."""
     telemetry_events: list[dict]
     incident: IncidentState | None
+    incident_id: str | None
     rl_prediction: str | None
     proposal: RemediationProposal | None
+    proposal_id: str | None
     human_approved: bool | None
     reward_signal: float | None

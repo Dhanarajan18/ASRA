@@ -21,6 +21,7 @@ var/
 
 # Virtual environments
 venv/
+.venv/
 .env
 
 # IDEs
@@ -35,3 +36,14 @@ faiss_index/
 # System
 .DS_Store
 Thumbs.db
+
+# Test/cache
+.pytest_cache/
+
+# Runtime artifacts
+audit.log
+sre_agent.db
+sre_policy_weights.npy
+
+# Personal local-only notes
+PERSONAL_RUNBOOK.md

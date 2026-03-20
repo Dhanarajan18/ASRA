@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SRE Agent - Live Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #f2f5f8;
+      --panel: #ffffff;
+      --ink: #122230;
+      --muted: #557182;
+      --ok: #2f9e44;
+      --warn: #d97706;
+      --bad: #c92a2a;
+      --accent: #0b7285;
+      --line: #dde7ee;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(circle at top right, #e6f6ff, var(--bg) 40%), var(--bg);
+    }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 18px; }
+    .header {
+      display: flex; justify-content: space-between; align-items: center;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .title { font-size: 22px; font-weight: 700; letter-spacing: 0.2px; }
+    .status { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+    .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--bad); }
+    .dot.running { background: var(--ok); box-shadow: 0 0 0 6px rgba(47,158,68,0.15); }
+
+    .metrics {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .k { font-size: 13px; color: var(--muted); }
+    .v { font-size: 28px; font-weight: 700; margin-top: 6px; }
+
+    .main {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: 3fr 2fr;
+      gap: 12px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    th { color: var(--muted); font-weight: 600; }
+
+    .sev { font-weight: 700; }
+    .sev.critical { color: var(--bad); }
+    .sev.high { color: var(--warn); }
+    .sev.low { color: var(--ok); }
+
+    .approval-actions { display: flex; gap: 8px; margin-top: 12px; }
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .approve { background: #2b8a3e; color: white; }
+    .reject { background: #b02a37; color: white; }
+
+    .chart-panel { margin-top: 14px; }
+
+    @media (max-width: 900px) {
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .main { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="title">SRE Agent - Live Dashboard</div>
+      <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">stopped</span></div>
+    </div>
+
+    <div class="metrics">
+      <div class="card"><div class="k">Total Incidents Today</div><div class="v" id="mTotal">0</div></div>
+      <div class="card"><div class="k">Auto-Resolved (%)</div><div class="v" id="mResolved">0%</div></div>
+      <div class="card"><div class="k">Avg Confidence Score</div><div class="v" id="mConfidence">0.00</div></div>
+      <div class="card"><div class="k">Pending Approvals</div><div class="v" id="mPending">0</div></div>
+    </div>
+
+    <div class="main">
+      <div class="panel">
+        <h3>Live Incident Feed</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Service</th>
+              <th>Severity</th>
+              <th>Action</th>
+              <th>Confidence</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="feed"></tbody>
+        </table>
+      </div>
+
+      <div class="panel" id="approvalPanel">
+        <h3>Pending Approval</h3>
+        <div id="approvalContent">No pending approvals.</div>
+      </div>
+    </div>
+
+    <div class="panel chart-panel">
+      <h3>RL Learning Curve</h3>
+      <canvas id="learningChart" height="100"></canvas>
+    </div>
+  </div>
+
+  <script>
+    let chart;
+    let polling = false;
+    let tickCount = 0;
+
+    async function fetchJson(path, opts) {
+      const res = await fetch(path, opts || {});
+      if (!res.ok) throw new Error(path + " failed");
+      return res.json();
+    }
+
+    function severityClass(sev) {
+      const s = (sev || "").toLowerCase();
+      if (s === "critical") return "critical";
+      if (s === "high") return "high";
+      return "low";
+    }
+
+    async function refreshMetrics() {
+      try {
+        const m = await fetchJson('/metrics');
+        const total = Number(m.total_incidents || 0);
+        const resolved = Number(m.auto_resolved || 0);
+        document.getElementById('mTotal').textContent = String(total);
+        document.getElementById('mResolved').textContent = total > 0 ? Math.round((resolved / total) * 100) + '%' : '0%';
+        document.getElementById('mConfidence').textContent = Number(m.avg_confidence || 0).toFixed(2);
+        document.getElementById('mPending').textContent = String(m.pending_approvals || 0);
+      } catch (_) {}
+    }
+
+    async function refreshFeed() {
+      try {
+        const rows = await fetchJson('/incidents?n=20');
+        const tbody = document.getElementById('feed');
+        tbody.innerHTML = '';
+        rows.forEach(r => {
+          const tr = document.createElement('tr');
+          const d = new Date(r.timestamp);
+          tr.innerHTML = `
+            <td>${isNaN(d) ? '-' : d.toLocaleTimeString()}</td>
+            <td>${r.service || '-'}</td>
+            <td class="sev ${severityClass(r.severity)}">${(r.severity || '').toUpperCase()}</td>
+            <td>${r.action || '-'}</td>
+            <td>${Number(r.confidence || 0).toFixed(2)}</td>
+            <td>${r.status || 'Pending'}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (_) {}
+    }
+
+    async function refreshPending() {
+      const panel = document.getElementById('approvalContent');
+      try {
+        const pending = await fetchJson('/proposals/pending');
+        if (!pending.length) {
+          panel.innerHTML = 'No pending approvals.';
+          return;
+        }
+        const p = pending[0];
+        panel.innerHTML = `
+          <div><b>Proposal ID:</b> ${p.id}</div>
+          <div><b>Action:</b> ${p.action}</div>
+          <div><b>Confidence:</b> ${Number(p.confidence_score || 0).toFixed(2)}</div>
+          <div><b>Rationale:</b> ${p.risk_rationale || '-'}</div>
+          <div><b>Rollback:</b> ${p.rollback_action}(${p.rollback_params})</div>
+          <div class="approval-actions">
+            <button class="approve" onclick="approve('${p.id}')">Approve ✓</button>
+            <button class="reject" onclick="reject('${p.id}')">Reject ✗</button>
+          </div>
+        `;
+      } catch (_) {
+        panel.innerHTML = 'No pending approvals.';
+      }
+    }
+
+    async function approve(id) {
+      await fetchJson(`/proposals/${id}/approve`, { method: 'POST' });
+      await tick();
+    }
+
+    async function reject(id) {
+      await fetchJson(`/proposals/${id}/reject`, { method: 'POST' });
+      await tick();
+    }
+
+    async function refreshChart() {
+      try {
+        const data = await fetchJson('/metrics/learning-curve');
+        if (!chart) {
+          chart = new Chart(document.getElementById('learningChart').getContext('2d'), {
+            type: 'line',
+            data: {
+              labels: data.episodes,
+              datasets: [
+                { label: 'Reward', data: data.rewards, borderColor: '#1971c2', backgroundColor: 'rgba(25,113,194,0.15)', tension: 0.25 },
+                { label: 'Confidence', data: data.confidence, borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,0.12)', tension: 0.25 }
+              ]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+          });
+        } else {
+          chart.data.labels = data.episodes;
+          chart.data.datasets[0].data = data.rewards;
+          chart.data.datasets[1].data = data.confidence;
+          chart.update();
+        }
+      } catch (_) {}
+    }
+
+    async function tick() {
+      if (polling) {
+        return;
+      }
+      polling = true;
+      document.getElementById('statusDot').classList.add('running');
+      document.getElementById('statusText').textContent = 'running';
+      try {
+        await Promise.all([refreshMetrics(), refreshFeed(), refreshPending()]);
+        // Learning curve is heavier; refresh every 3 polling cycles.
+        if (tickCount % 3 === 0) {
+          await refreshChart();
+        }
+        tickCount += 1;
+      } finally {
+        polling = false;
+      }
+    }
+
+    tick();
+    setInterval(tick, 7000);
+  </script>
+</body>
+</html>

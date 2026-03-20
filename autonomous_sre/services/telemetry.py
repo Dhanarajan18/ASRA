@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-import time
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 class BaseEvent(BaseModel):
     service: str = Field(description="The source service")
-    timestamp: float = Field(default_factory=time.time)
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
 class LogEvent(BaseEvent):
@@ -48,7 +48,26 @@ class TraceEvent(BaseEvent):
 # Simulator
 # ──────────────────────────────────────────────
 
-_SERVICES = ["payment-gateway", "auth-service", "order-api", "inventory-db"]
+SERVICES = [
+    "auth-service",
+    "payment-service",
+    "order-service",
+    "user-service",
+    "api-gateway",
+    "notification-service",
+]
+
+# Service dependency map for cascade failure simulation
+SERVICE_DEPENDENCIES = {
+    "api-gateway": ["auth-service", "order-service", "user-service"],
+    "order-service": ["payment-service", "user-service"],
+    "payment-service": [],
+    "auth-service": [],
+    "user-service": [],
+    "notification-service": ["order-service"],
+}
+
+_SERVICES = SERVICES  # Backwards compatibility
 _LOG_MESSAGES = ["Request successful", "Cache miss", "Connection timeout", "DB transaction rolled back"]
 
 
@@ -62,7 +81,12 @@ class TelemetrySimulator:
         """
         Async generator yielding `n` random telemetry events.
         Events are weighted: 40% Logs, 40% Metrics, 20% Traces.
+        
+        Supports cascade failure simulation: when a primary service anomaly 
+        is detected, dependent services exhibit degraded (but not anomalous) metrics.
         """
+        anomalous_primary_service = None
+        
         for _ in range(n):
             await asyncio.sleep(0.05)  # Simulate network ingestion latency
 
@@ -82,8 +106,14 @@ class TelemetrySimulator:
 
             elif event_type == "metric":
                 is_anomaly = random.random() < self.anomaly_prob
+                
+                # Check if this service is a dependent of an anomalous primary
+                is_cascade_effect = False
+                if anomalous_primary_service and service in SERVICE_DEPENDENCIES.get(anomalous_primary_service, []):
+                    is_cascade_effect = True
+                
                 if is_anomaly:
-                    # Inject spike (CPU > 90 or latency > 2000)
+                    # Primary service anomaly
                     if random.random() < 0.5:
                         cpu = random.uniform(91.0, 100.0)
                         latency = random.uniform(10.0, 500.0)
@@ -91,11 +121,22 @@ class TelemetrySimulator:
                         cpu = random.uniform(10.0, 60.0)
                         latency = random.uniform(2001.0, 5000.0)
                     mem = random.uniform(60.0, 95.0)
+                    anomalous_primary_service = service  # Mark as primary anomaly
+                    
+                elif is_cascade_effect:
+                    # Dependent service showing degradation (not anomaly)
+                    cpu = random.uniform(65.0, 82.0)  # Elevated but below anomaly threshold
+                    mem = random.uniform(50.0, 70.0)
+                    latency = random.uniform(400.0, 950.0)  # Slightly elevated latency
+                    
                 else:
                     # Normal operating bounds
                     cpu = random.uniform(10.0, 60.0)
                     mem = random.uniform(20.0, 70.0)
                     latency = random.uniform(10.0, 300.0)
+                    # Clear anomalous primary after a few iterations
+                    if random.random() < 0.1:
+                        anomalous_primary_service = None
 
                 yield MetricEvent(
                     service=service,

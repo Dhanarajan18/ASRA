@@ -13,11 +13,12 @@ from __future__ import annotations
 import collections
 import logging
 import random
+import os
 import numpy as np
 from typing import Any
 
-from state import IncidentState, Severity
-from config import settings
+from autonomous_sre.core.state import IncidentState, Severity
+from autonomous_sre.core.config import settings
 
 logger = logging.getLogger("sre_learning")
 logger.setLevel(logging.INFO)
@@ -74,11 +75,33 @@ def encode_state(incident: IncidentState) -> np.ndarray:
 class LearningEngine:
     """RL Engine managing policy weights and experience replay."""
 
+    WEIGHTS_PATH = "sre_policy_weights.npy"
+
     def __init__(self, state_dim: int = 8, n_actions: int | None = None) -> None:
         self.state_dim = state_dim
         self.n_actions = n_actions or len(ACTION_SPACE)
         self._policy_weights = np.random.randn(self.n_actions, self.state_dim) * 0.01
         self._replay_buffer = collections.deque(maxlen=settings.rl_replay_buffer_size)
+        
+        # Load existing weights or apply warm-start
+        self.load_weights()
+
+    def _apply_warm_start_bias(self) -> None:
+        """
+        Apply warm-start heuristic bias to action weights on the CPU feature (dimension 0).
+        This prevents argmax from always selecting no_action during cold-start.
+        """
+        WARM_START_BIAS = np.array([
+            0.80,   # scale_replicas      — high CPU default
+            0.60,   # restart_pod
+            0.50,   # rollback_deployment
+            0.40,   # increase_memory_limit
+            0.30,   # flush_cache
+            0.30,   # reroute_traffic
+            0.05,   # no_action — deprioritised for non-LOW severity
+        ], dtype=np.float32)
+        self._policy_weights[:, 0] = WARM_START_BIAS
+        logger.info("LearningEngine | Applied warm-start bias to policy weights (CPU feature dimension)")
 
     def select_action(self, state_vec: np.ndarray, epsilon: float = 0.1) -> str:
         """ε-greedy action selection."""
@@ -120,12 +143,12 @@ class LearningEngine:
         gamma_val = gamma if gamma is not None else settings.rl_discount_factor
         lr_val = lr if lr is not None else settings.rl_learning_rate
 
-        if len(self._replay_buffer) < 2:
-            logger.warning("update_policy skipped | insufficient buffer size")
+        actual_batch = min(batch_size, len(self._replay_buffer))
+        if actual_batch < 4:
+            logger.warning(f"update_policy skipped | need >= 4 samples, have {actual_batch}")
             return
 
-        batch_sz = min(batch_size, len(self._replay_buffer))
-        batch = random.sample(self._replay_buffer, batch_sz)
+        batch = random.sample(list(self._replay_buffer), actual_batch)
         
         total_td_err = 0.0
         for s, a_idx, r, s_next in batch:
@@ -144,8 +167,38 @@ class LearningEngine:
             # Gradient step
             self._policy_weights[a_idx] += lr_val * td_error * s
 
-        avg_td = total_td_err / batch_sz
-        logger.info(f"update_policy | updated weights on batch_size={batch_sz} | avg_td_error={avg_td:.4f}")
+        avg_td = total_td_err / actual_batch
+        logger.info(f"update_policy | updated weights on batch_size={actual_batch} | avg_td_error={avg_td:.4f}")
+        
+        # Persist weights after every update
+        self.save_weights()
+
+    def load_weights(self) -> None:
+        """
+        Load policy weights from disk if they exist, otherwise apply warm-start bias.
+        Called on initialization to enable training continuity across restarts.
+        """
+        if os.path.exists(self.WEIGHTS_PATH):
+            try:
+                self._policy_weights = np.load(self.WEIGHTS_PATH)
+                logger.info(f"LearningEngine | Loaded existing policy weights from {self.WEIGHTS_PATH}")
+                return
+            except Exception as e:
+                logger.warning(f"LearningEngine | Failed to load weights: {e}. Applying warm-start bias.")
+        
+        # First run: apply warm-start bias
+        self._apply_warm_start_bias()
+
+    def save_weights(self) -> None:
+        """
+        Save policy weights to disk for training continuity across restarts.
+        Called after every policy update.
+        """
+        try:
+            np.save(self.WEIGHTS_PATH, self._policy_weights)
+            logger.info(f"LearningEngine | Policy weights saved to {self.WEIGHTS_PATH}")
+        except Exception as e:
+            logger.error(f"LearningEngine | Failed to save weights: {e}")
 
     def calculate_reward(self, outcome: str, human_feedback: float) -> float:
         """

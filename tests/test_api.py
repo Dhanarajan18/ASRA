@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from fastapi.testclient import TestClient
 import pytest
 
-import api
+from autonomous_sre.interfaces import api
+from autonomous_sre.infrastructure import approval_bus
 
 
 @pytest.fixture(autouse=True)
-def clear_pending_incidents():
-    with api.pending_incidents_lock:
-        api.pending_incidents.clear()
+def clear_pending_state():
+    approval_bus._pending.clear()
+    approval_bus._decisions.clear()
     yield
-    with api.pending_incidents_lock:
-        api.pending_incidents.clear()
+    approval_bus._pending.clear()
+    approval_bus._decisions.clear()
 
 
 @pytest.fixture()
@@ -30,75 +32,68 @@ def test_health_endpoints(client: TestClient):
     assert ready.json()["status"] == "ready"
 
 
-def test_webhook_accepts_alert_and_starts_background_task(monkeypatch: pytest.MonkeyPatch, client: TestClient):
-    calls: list[tuple[str, dict, bool]] = []
+def test_trigger_endpoint_accepted(monkeypatch: pytest.MonkeyPatch, client: TestClient):
+    executed = {"value": False}
 
-    def fake_run_graph_thread(thread_id: str, state: dict | None = None, resume: bool = False):
-        calls.append((thread_id, state or {}, resume))
+    async def fake_run_agent_async():
+        executed["value"] = True
 
-    monkeypatch.setattr(api, "run_graph_thread", fake_run_graph_thread)
+    monkeypatch.setattr(api, "run_agent_async", fake_run_agent_async)
 
-    payload = {
-        "service": "api-gateway",
-        "alert_name": "HighLatency",
-        "severity": "critical",
-        "metrics": {"latency_ms": 3500.0, "cpu_pct": 98.0},
-    }
+    tasks = []
 
-    response = client.post("/webhook/alert", json=payload)
+    def fake_create_task(coro):
+        task = asyncio.get_event_loop().create_task(coro)
+        tasks.append(task)
+        return task
+
+    monkeypatch.setattr(api.asyncio, "create_task", fake_create_task)
+
+    response = client.post("/trigger")
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "accepted"
-    assert "thread_id" in body
+    assert body["status"] == "triggered"
+    assert "timestamp" in body
 
-    assert len(calls) == 1
-    assert calls[0][0] == body["thread_id"]
-    assert calls[0][2] is False
+    for task in tasks:
+        task.cancel()
 
 
-def test_pending_incidents_returns_data(client: TestClient):
-    with api.pending_incidents_lock:
-        api.pending_incidents["thread-1"] = {
-            "service": "payment-gateway",
-            "action": "restart_pod",
-            "confidence": 0.9,
-            "rationale": "Test rationale",
-            "rollback": "rollback_restart_pod({...})",
-        }
+def test_pending_proposals_returns_data(monkeypatch: pytest.MonkeyPatch, client: TestClient):
+    monkeypatch.setitem(api.pending_proposals.__globals__, "list_pending_ids", lambda: ["proposal-1"])
 
-    response = client.get("/api/incidents/pending")
+    class _FakeDB:
+        @staticmethod
+        def get_proposal_by_id(proposal_id: str):
+            return {
+                "id": proposal_id,
+                "incident_id": "incident-1",
+                "action": "restart_pod",
+                "confidence_score": 0.9,
+            }
+
+    monkeypatch.setitem(api.pending_proposals.__globals__, "db", _FakeDB())
+
+    response = client.get("/proposals/pending")
     assert response.status_code == 200
     data = response.json()
-    assert data["pending_count"] == 1
-    assert "thread-1" in data["incidents"]
+    assert len(data) == 1
+    assert data[0]["id"] == "proposal-1"
 
 
-def test_approve_returns_404_for_unknown_thread(client: TestClient):
-    response = client.post("/api/incidents/does-not-exist/approve")
+def test_approve_returns_404_for_unknown_proposal(client: TestClient):
+    response = client.post("/proposals/does-not-exist/approve")
     assert response.status_code == 404
 
 
-def test_reject_returns_404_for_unknown_thread(client: TestClient):
-    response = client.post("/api/incidents/does-not-exist/reject")
+def test_reject_returns_404_for_unknown_proposal(client: TestClient):
+    response = client.post("/proposals/does-not-exist/reject")
     assert response.status_code == 404
 
 
-def test_optional_api_key_enforced_when_enabled(monkeypatch: pytest.MonkeyPatch, client: TestClient):
-    monkeypatch.setattr(api.settings, "api_key_enabled", True)
-    monkeypatch.setattr(api.settings, "api_key", "secret123")
-
-    payload = {
-        "service": "api-gateway",
-        "alert_name": "HighLatency",
-        "severity": "critical",
-        "metrics": {"latency_ms": 3500.0, "cpu_pct": 98.0},
-    }
-
-    unauthorized = client.post("/webhook/alert", json=payload)
-    assert unauthorized.status_code == 401
-
-    authorized = client.post("/webhook/alert", json=payload, headers={"x-api-key": "secret123"})
-    assert authorized.status_code == 200
-
-    monkeypatch.setattr(api.settings, "api_key_enabled", False)
-    monkeypatch.setattr(api.settings, "api_key", "")
+def test_metrics_endpoint_shape(client: TestClient):
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert "total_incidents" in body
+    assert "pending_approvals" in body

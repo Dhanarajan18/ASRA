@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from incident_store import InMemoryIncidentStore
+from autonomous_sre.infrastructure.incident_store import InMemoryIncidentStore
 
 
 def test_store_upsert_contains_and_count():

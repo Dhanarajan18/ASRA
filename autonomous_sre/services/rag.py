@@ -15,7 +15,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import FakeEmbeddings
 from langchain_core.documents import Document
 
-from config import settings
+from autonomous_sre.core.config import settings
 
 logger = logging.getLogger("sre_rag")
 logger.setLevel(logging.INFO)
