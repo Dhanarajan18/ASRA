@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
+.opencode
+API_DOCUMENTATION.md
+PRODUCTION_DEPLOYMENT.md
 *$py.class
 *.so
 .Python

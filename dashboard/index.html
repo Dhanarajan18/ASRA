@@ -82,7 +82,13 @@
     .approve { background: #2b8a3e; color: white; }
     .reject { background: #b02a37; color: white; }
 
-    .chart-panel { margin-top: 14px; }
+    .chart-panel { margin-top: 14px; max-width: 800px; margin-left: auto; margin-right: auto; overflow-x: auto; }
+    
+    /* Make chart responsive but with reasonable height */
+    #learningChart {
+      max-height: 300px;
+      width: 100%;
+    }
 
     @media (max-width: 900px) {
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -152,6 +158,16 @@
       return "low";
     }
 
+    function parseApiTimestamp(raw) {
+      if (!raw || typeof raw !== 'string') {
+        return null;
+      }
+      const hasZone = raw.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(raw);
+      const normalized = hasZone ? raw : raw + 'Z';
+      const parsed = new Date(normalized);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
     async function refreshMetrics() {
       try {
         const m = await fetchJson('/metrics');
@@ -171,9 +187,9 @@
         tbody.innerHTML = '';
         rows.forEach(r => {
           const tr = document.createElement('tr');
-          const d = new Date(r.timestamp);
+          const d = parseApiTimestamp(r.timestamp);
           tr.innerHTML = `
-            <td>${isNaN(d) ? '-' : d.toLocaleTimeString()}</td>
+            <td>${d ? d.toLocaleTimeString() : '-'}</td>
             <td>${r.service || '-'}</td>
             <td class="sev ${severityClass(r.severity)}">${(r.severity || '').toUpperCase()}</td>
             <td>${r.action || '-'}</td>
@@ -205,19 +221,42 @@
             <button class="reject" onclick="reject('${p.id}')">Reject ✗</button>
           </div>
         `;
+        
+        // Also update the pending count in metrics
+        const pendingCount = document.getElementById('mPending');
+        if (pendingCount) {
+          pendingCount.textContent = pending.length;
+        }
       } catch (_) {
         panel.innerHTML = 'No pending approvals.';
+        // Still try to update count even on error
+        const pendingCount = document.getElementById('mPending');
+        if (pendingCount) {
+          pendingCount.textContent = '0';
+        }
       }
     }
 
     async function approve(id) {
-      await fetchJson(`/proposals/${id}/approve`, { method: 'POST' });
-      await tick();
+      try {
+        const res = await fetchJson(`/proposals/${id}/approve`, { method: 'POST' });
+        console.log('Approve response:', res);
+        await tick();
+      } catch (e) {
+        console.error('Approve failed:', e);
+        alert('Failed to approve: ' + (e.message || 'Unknown error'));
+      }
     }
 
     async function reject(id) {
-      await fetchJson(`/proposals/${id}/reject`, { method: 'POST' });
-      await tick();
+      try {
+        const res = await fetchJson(`/proposals/${id}/reject`, { method: 'POST' });
+        console.log('Reject response:', res);
+        await tick();
+      } catch (e) {
+        console.error('Reject failed:', e);
+        alert('Failed to reject: ' + (e.message || 'Unknown error'));
+      }
     }
 
     async function refreshChart() {
@@ -229,11 +268,41 @@
             data: {
               labels: data.episodes,
               datasets: [
-                { label: 'Reward', data: data.rewards, borderColor: '#1971c2', backgroundColor: 'rgba(25,113,194,0.15)', tension: 0.25 },
-                { label: 'Confidence', data: data.confidence, borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,0.12)', tension: 0.25 }
+                { label: 'Reward', data: data.rewards, borderColor: '#1971c2', backgroundColor: 'rgba(25,113,194,0.15)', tension: 0.25, yAxisID: 'y1' },
+                { label: 'Confidence', data: data.confidence, borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,0.12)', tension: 0.25, yAxisID: 'y2' }
               ]
             },
-            options: { responsive: true, maintainAspectRatio: false }
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                y1: {
+                  type: 'linear',
+                  position: 'left',
+                  title: {
+                    display: true,
+                    text: 'Reward'
+                  },
+                  // Set reasonable range for rewards (typically between -1 and 1)
+                  min: -1,
+                  max: 1
+                },
+                y2: {
+                  type: 'linear',
+                  position: 'right',
+                  title: {
+                    display: true,
+                    text: 'Confidence'
+                  },
+                  // Confidence is always between 0 and 1
+                  min: 0,
+                  max: 1,
+                  grid: {
+                    drawOnChartArea: false, // only want the grid lines for one axis to avoid clutter
+                  }
+                }
+              }
+            }
           });
         } else {
           chart.data.labels = data.episodes;

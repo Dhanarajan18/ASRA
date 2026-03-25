@@ -53,6 +53,7 @@ async def run_training_warmup(n_episodes: int = 50) -> None:
         
         initial_state: AgentState = {
             "telemetry_events": batch,
+            "force_human_review": False,
             "incident": None,
             "incident_id": None,
             "rl_prediction": None,
@@ -88,6 +89,7 @@ async def main():
 
     initial_state: AgentState = {
         "telemetry_events": batch,
+        "force_human_review": False,
         "incident": None,
         "incident_id": None,
         "rl_prediction": None,

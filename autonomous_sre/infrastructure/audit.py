@@ -11,7 +11,7 @@ import logging
 import json
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger("sre_audit")
 logger.setLevel(logging.INFO)
@@ -138,9 +138,9 @@ class AuditLogger:
         incident_id: str,
         proposal_id: str,
         action: str,
-        params: dict[str, any],
+        params: dict,
         rollback_action: str,
-        rollback_params: dict[str, any],
+        rollback_params: dict,
     ) -> str:
         """Log action execution with rollback information."""
         return self.log(
@@ -182,6 +182,23 @@ class AuditLogger:
         except FileNotFoundError:
             logger.warning(f"AuditLogger | Audit file not found: {self.log_file}")
         return entries
+
+    def log_error(
+        self,
+        error_type: str,
+        error_message: str,
+        context: Optional[dict[str, Any]] = None
+    ) -> str:
+        """Log an error occurrence for debugging and monitoring."""
+        return self.log(
+            node="error_handler",
+            action="error_occurred",
+            actor="system",
+            decision="logged",
+            incident_id="error-" + str(uuid.uuid4())[:8],
+            rationale=f"{error_type}: {error_message}",
+            rollback_plan=f"Context: {context or {}}"
+        )
 
 
 # Global audit logger instance

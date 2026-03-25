@@ -61,6 +61,7 @@ async def run_scenario(name: str, runs: int) -> None:
 
         state: AgentState = {
             "telemetry_events": batch,
+            "force_human_review": False,
             "incident": None,
             "incident_id": None,
             "rl_prediction": None,

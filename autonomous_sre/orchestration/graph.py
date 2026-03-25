@@ -11,8 +11,6 @@ import logging
 import uuid
 import os
 import math
-import asyncio
-import time
 import numpy as np
 from typing import Any
 
@@ -37,8 +35,7 @@ logger.setLevel(logging.INFO)
 # ──────────────────────────────────────────────
 
 # Human-in-the-loop confidence threshold (configurable via env var)
-# Default 0.60 for demo, 0.75 recommended for production
-HITL_THRESHOLD = float(os.getenv("HITL_THRESHOLD", "0.60"))
+HITL_THRESHOLD = float(os.getenv("HITL_THRESHOLD", str(settings.approval_confidence_threshold)))
 API_MODE = os.getenv("API_MODE", "false").lower() == "true"
 logger.info(f"HITL_THRESHOLD set to {HITL_THRESHOLD:.2f} (set HITL_THRESHOLD env var to override)")
 
@@ -85,8 +82,8 @@ def analyzer_node(state: AgentState) -> dict[str, Any]:
         summary = f"Detected high CPU ({cpu:.1f}%) or Latency ({lat:.0f}ms) on {service}"
         
         # Calculate derived metrics for snapshot
-        err_rates = [e.get("error") for e in events if e.get("event_type") == "trace"]
-        error_rate = sum(err_rates) / len(err_rates) * 100 if err_rates else 0.0
+        err_rates = [e.get("error") for e in events if e.get("event_type") == "trace" and isinstance(e.get("error"), (bool, int, float))]
+        error_rate = sum([float(rate) for rate in err_rates]) / len(err_rates) * 100 if err_rates else 0.0
         
         snapshot = {
             "cpu_pct": cpu,
@@ -233,12 +230,14 @@ def proposer_node(state: AgentState) -> dict[str, Any]:
     
     # Save proposal to database (human_approved=None as it's pending)
     incident_id = state.get("incident_id")
+    if incident_id is None:
+        raise ValueError("incident_id is required but was None")
     proposal_id = db.save_proposal(proposal, incident_id, approved=None, reward=0.0)
     
     # Log to audit trail
     audit_logger.log_proposal_generated(
-        incident_id=incident_id,
-        proposal_id=proposal_id,
+        incident_id=str(incident_id) if incident_id is not None else "",
+        proposal_id=str(proposal_id) if proposal_id is not None else "",
         action=action,
         confidence=confidence,
         rationale=rationale
@@ -262,29 +261,24 @@ def human_in_the_loop_node(state: AgentState) -> dict[str, Any]:
     proposal_id = state.get("proposal_id")
     assert proposal is not None and incident is not None
     
-    if proposal.confidence_score >= HITL_THRESHOLD and state.get("human_approved") is None:
+    requires_human_review = bool(state.get("force_human_review", False)) or proposal.confidence_score >= HITL_THRESHOLD
+
+    if requires_human_review and state.get("human_approved") is None:
         if API_MODE and proposal_id:
             logger.info(
                 "human_in_the_loop_node | API_MODE enabled; awaiting approval for proposal %s (timeout=300s)",
                 proposal_id,
             )
             event = register_pending(proposal_id)
-            try:
-                try:
-                    asyncio.get_running_loop()
-                    deadline = time.time() + 300
-                    while not event.is_set() and time.time() < deadline:
-                        time.sleep(0.25)
-                    if not event.is_set():
-                        raise TimeoutError
-                except RuntimeError:
-                    asyncio.run(asyncio.wait_for(event.wait(), timeout=300))
-                decision = pop_decision(proposal_id)
-                state["human_approved"] = bool(decision)
-            except TimeoutError:
+            # Use thread-safe event waiting (works in threads without event loop)
+            is_set = event.wait(timeout=300)
+            if not is_set:
                 logger.warning("human_in_the_loop_node | Approval wait timed out; escalating.")
                 pop_decision(proposal_id)
                 state["human_approved"] = False
+            else:
+                decision = pop_decision(proposal_id)
+                state["human_approved"] = bool(decision)
         else:
             # CLI fallback mode for local runs without API
             decision = input(f"Approve action '{proposal.action}'? [y/N]: ").strip().lower()
@@ -297,7 +291,7 @@ def human_in_the_loop_node(state: AgentState) -> dict[str, Any]:
     s_vec = encode_state(incident)
     action_name = proposal.action
     
-    if proposal.confidence_score >= HITL_THRESHOLD:
+    if requires_human_review:
         # We are resuming from an interrupt. Check the injected state.
         human_approved = state.get("human_approved", False)
         
@@ -310,8 +304,8 @@ def human_in_the_loop_node(state: AgentState) -> dict[str, Any]:
             
             # Log approval decision
             audit_logger.log_approval_decision(
-                incident_id=incident_id,
-                proposal_id=proposal_id,
+                incident_id=str(incident_id) if incident_id is not None else "",
+                proposal_id=str(proposal_id) if proposal_id is not None else "",
                 action=action_name,
                 approved=True,
                 rationale="Human approved the proposal via API"
@@ -350,7 +344,11 @@ def human_in_the_loop_node(state: AgentState) -> dict[str, Any]:
         db.update_proposal_approval(proposal_id, human_approved, reward)
     else:
         # Low confidence -> Auto escalate immediately (no interrupt)
-        logger.warning(f"human_in_the_loop_node | Low confidence ({proposal.confidence_score:.2f}). Auto-escalating.")
+        logger.warning(
+            "human_in_the_loop_node | Confidence %.2f below HITL threshold %.2f. Auto-escalating.",
+            proposal.confidence_score,
+            HITL_THRESHOLD,
+        )
         human_approved = False
         reward = engine.calculate_reward("escalated", 0.5)
         

@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     api_key_enabled: bool = Field(default=False, description="Enable API key auth for mutation endpoints")
     api_key: str = Field(default="", description="Shared API key when auth is enabled")
     api_key_header: str = Field(default="x-api-key", description="Header name containing the API key")
+    
+    # Security settings
+    secret_key: str = Field(default="", description="Secret key for cryptographic operations")
+    access_token_expire_minutes: int = Field(default=30, description="Access token expiration time in minutes")
 
     # ── LLM ──
     openai_api_key: str = Field(default="sk-placeholder", description="OpenAI API key")

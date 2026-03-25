@@ -11,7 +11,7 @@ import sqlite3
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 import numpy as np
 
@@ -19,6 +19,11 @@ from autonomous_sre.core.state import IncidentState, RemediationProposal
 
 logger = logging.getLogger("sre_persistence")
 logger.setLevel(logging.INFO)
+
+
+def _utc_now_iso() -> str:
+    """Return an RFC3339 UTC timestamp with explicit Z suffix."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class SREDatabase:
@@ -115,12 +120,12 @@ class SREDatabase:
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             incident_id,
-            datetime.utcnow().isoformat(),
+            _utc_now_iso(),
             service,
             incident.severity.value,
             incident.anomaly_summary,
             rag_context_json,
-            datetime.utcnow().isoformat(),
+            _utc_now_iso(),
         ))
 
         self.conn.commit()
@@ -165,7 +170,7 @@ class SREDatabase:
             json.dumps(proposal.rollback_params),
             1 if approved else (0 if approved is False else None),
             reward,
-            datetime.utcnow().isoformat() if approved is not None else None,
+            _utc_now_iso() if approved is not None else None,
         ))
 
         self.conn.commit()
@@ -184,7 +189,7 @@ class SREDatabase:
             UPDATE proposals
             SET human_approved = ?, reward = ?, executed_at = ?
             WHERE id = ?
-        """, (1 if approved else 0, reward, datetime.utcnow().isoformat(), proposal_id))
+        """, (1 if approved else 0, reward, _utc_now_iso(), proposal_id))
         self.conn.commit()
         logger.info(f"SREDatabase | Updated proposal {proposal_id}: approved={approved}, reward={reward:.3f}")
 
@@ -205,7 +210,7 @@ class SREDatabase:
             action,
             reward,
             json.dumps(next_state_vec.tolist()),
-            datetime.utcnow().isoformat(),
+            _utc_now_iso(),
         ))
         self.conn.commit()
 
@@ -222,7 +227,7 @@ class SREDatabase:
             INSERT INTO episode_metrics (timestamp, action_chosen, confidence, reward, was_correct)
             VALUES (?, ?, ?, ?, ?)
         """, (
-            datetime.utcnow().isoformat(),
+            _utc_now_iso(),
             action_chosen,
             confidence,
             reward,

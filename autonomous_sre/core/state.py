@@ -39,6 +39,7 @@ class RemediationProposal(BaseModel):
 class AgentState(TypedDict):
     """The global state object passed through the LangGraph pipeline."""
     telemetry_events: list[dict]
+    force_human_review: bool
     incident: IncidentState | None
     incident_id: str | None
     rl_prediction: str | None
