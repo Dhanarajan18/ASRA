@@ -1,0 +1,52 @@
+__pycache__/
+*.py[cod]
+.opencode
+API_DOCUMENTATION.md
+PRODUCTION_DEPLOYMENT.md
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+.env
+
+# IDEs
+.idea/
+.vscode/
+
+# Vector stores
+vector_db/
+chroma_db/
+faiss_index/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Test/cache
+.pytest_cache/
+
+# Runtime artifacts
+audit.log
+sre_agent.db
+sre_policy_weights.npy
+
+# Personal local-only notes
+PERSONAL_RUNBOOK.md

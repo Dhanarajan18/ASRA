@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Autonomous SRE Mission Control</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-0: #f2efe7;
+      --bg-1: #ebe5d8;
+      --ink-0: #10212f;
+      --ink-1: #325267;
+      --panel: rgba(255, 255, 255, 0.75);
+      --line: rgba(16, 33, 47, 0.14);
+      --ok: #188c5d;
+      --warn: #c56e13;
+      --bad: #c3392e;
+      --info: #1b6bb3;
+      --shadow: 0 10px 30px rgba(21, 44, 61, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink-0);
+      font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(1200px 700px at 10% -20%, #fff5d8 0%, transparent 60%),
+        radial-gradient(1200px 700px at 90% 0%, #d9f1ff 0%, transparent 52%),
+        linear-gradient(160deg, var(--bg-0), var(--bg-1));
+      min-height: 100vh;
+    }
+
+    .shell {
+      max-width: 1340px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    .hero {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      background: linear-gradient(125deg, rgba(255,255,255,0.8), rgba(255,255,255,0.55));
+      backdrop-filter: blur(9px);
+      padding: 20px 22px;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 320px;
+      height: 320px;
+      border-radius: 50%;
+      right: -90px;
+      top: -120px;
+      background: radial-gradient(circle, rgba(27,107,179,0.18), rgba(27,107,179,0));
+    }
+
+    .hero-top {
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 0.11em;
+      font-size: 11px;
+      color: var(--ink-1);
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.1;
+      max-width: 760px;
+    }
+
+    .subtitle {
+      margin-top: 8px;
+      color: var(--ink-1);
+      max-width: 760px;
+      font-family: "Source Serif 4", Georgia, serif;
+      font-size: 18px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: rgba(255,255,255,0.8);
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--bad);
+      transition: all .2s ease;
+    }
+
+    .dot.live {
+      background: var(--ok);
+      box-shadow: 0 0 0 7px rgba(24, 140, 93, 0.15);
+    }
+
+    .hero-controls {
+      margin-top: 16px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .hero-controls input {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 10px 12px;
+      min-width: 240px;
+      background: rgba(255,255,255,0.88);
+      font-family: inherit;
+    }
+
+    .hero-controls button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 700;
+      font-family: inherit;
+      background: #1b6bb3;
+      color: #fff;
+      transition: transform .16s ease, box-shadow .16s ease;
+    }
+
+    .hero-controls button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 16px rgba(27,107,179,0.26);
+    }
+
+    .grid-kpi {
+      margin-top: 16px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      padding: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .kpi .label {
+      font-size: 12px;
+      color: var(--ink-1);
+    }
+
+    .kpi .value {
+      margin-top: 6px;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .layout {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: 2.3fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ink-1);
+    }
+
+    .panel-body {
+      padding: 14px;
+    }
+
+    .summary-text {
+      font-family: "Source Serif 4", Georgia, serif;
+      font-size: 18px;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      max-height: 480px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .timeline-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px;
+      background: rgba(255,255,255,0.88);
+      transform: translateY(8px);
+      opacity: 0;
+      animation: rise .28s ease forwards;
+    }
+
+    @keyframes rise {
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+
+    .item-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 4px 8px;
+      border: 1px solid transparent;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .critical { color: #8e1d16; background: #fde0dc; border-color: #f6b8b1; }
+    .high { color: #7c3d0b; background: #ffe5cb; border-color: #f3c896; }
+    .low { color: #155f3f; background: #dff7ea; border-color: #bde9d3; }
+    .approved { color: #155f3f; background: #dff7ea; border-color: #bde9d3; }
+    .rejected { color: #8e1d16; background: #fde0dc; border-color: #f6b8b1; }
+    .pending { color: #7b5a12; background: #fdf4cf; border-color: #f2e090; }
+
+    .incident-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .incident-body {
+      color: var(--ink-1);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .approve-card {
+      display: grid;
+      gap: 10px;
+    }
+
+    .approve-card .rationale {
+      font-size: 13px;
+      color: var(--ink-1);
+      line-height: 1.4;
+      max-height: 130px;
+      overflow: auto;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .detail-box {
+      margin-top: 8px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: rgba(255,255,255,0.74);
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--ink-1);
+    }
+
+    .detail-box ol {
+      margin: 6px 0 0 16px;
+      padding: 0;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 13px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      font-family: inherit;
+      transition: transform .15s ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); }
+    .btn-approve { background: var(--ok); color: #fff; }
+    .btn-reject { background: var(--bad); color: #fff; }
+
+    .chart-wrap {
+      height: 280px;
+      position: relative;
+    }
+
+    .insight-list {
+      margin-top: 10px;
+      display: grid;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--ink-1);
+    }
+
+    .insight-item {
+      border-left: 3px solid #d2e6f7;
+      padding-left: 8px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 680px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--ink-1);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+    }
+
+    .muted {
+      color: var(--ink-1);
+      opacity: .8;
+      font-size: 12px;
+    }
+
+    @media (max-width: 1200px) {
+      .grid-kpi { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 760px) {
+      .shell { padding: 12px; }
+      h1 { font-size: 28px; }
+      .subtitle { font-size: 16px; }
+      .grid-kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hero-controls input { min-width: 160px; width: 100%; }
+      .hero-controls button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="eyebrow">Autonomous SRE Agent</div>
+          <h1>Mission Control Dashboard</h1>
+          <p class="subtitle" id="executiveNarrative">
+            Loading live operations context from the API.
+          </p>
+        </div>
+        <div class="status-pill">
+          <span id="statusDot" class="dot"></span>
+          <span id="statusText">sync paused</span>
+        </div>
+      </div>
+      <div class="hero-controls">
+        <input id="apiKey" placeholder="Optional API key for approve/reject/trigger" />
+        <button id="triggerSafe">Trigger New Analysis</button>
+      </div>
+      <div class="grid-kpi">
+        <article class="kpi"><div class="label">Incidents Today</div><div class="value" id="mTotal">0</div></article>
+        <article class="kpi"><div class="label">Approved</div><div class="value" id="mApproved">0</div></article>
+        <article class="kpi"><div class="label">Rejected</div><div class="value" id="mRejected">0</div></article>
+        <article class="kpi"><div class="label">Pending</div><div class="value" id="mPending">0</div></article>
+        <article class="kpi"><div class="label">Avg AI Confidence</div><div class="value" id="mConfidence">0.00</div></article>
+        <article class="kpi"><div class="label">Auto Resolve Rate</div><div class="value" id="mResolved">0%</div></article>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="stack">
+        <article class="panel">
+          <div class="panel-head">Situation Room</div>
+          <div class="panel-body">
+            <div id="timeline" class="timeline"></div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">Actions And Outcomes</div>
+          <div class="panel-body table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Service</th>
+                  <th>Severity</th>
+                  <th>AI Recommendation</th>
+                  <th>Decision</th>
+                  <th>Confidence</th>
+                </tr>
+              </thead>
+              <tbody id="feed"></tbody>
+            </table>
+          </div>
+        </article>
+      </div>
+
+      <div class="stack">
+        <article class="panel">
+          <div class="panel-head">Approval Console</div>
+          <div class="panel-body">
+            <div id="approvalContent">No pending approvals right now.</div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">Escalation Work Queue</div>
+          <div class="panel-body">
+            <div id="escalationContent">No escalations in queue.</div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">RL Learning From Human Feedback</div>
+          <div class="panel-body">
+            <div class="chart-wrap">
+              <canvas id="learningChart"></canvas>
+            </div>
+            <div id="learningInsights" class="insight-list"></div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let chart;
+    let polling = false;
+    let tickCount = 0;
+
+    function getApiHeaders() {
+      const key = (document.getElementById("apiKey")?.value || "").trim();
+      return key ? { "X-API-Key": key } : {};
+    }
+
+    async function fetchJson(path, opts) {
+      const headers = Object.assign({}, getApiHeaders(), (opts && opts.headers) || {});
+      const res = await fetch(path, Object.assign({}, opts || {}, { headers }));
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(path + " failed with status " + res.status + ": " + body);
+      }
+      return res.json();
+    }
+
+    function parseApiTimestamp(raw) {
+      if (!raw || typeof raw !== "string") return null;
+      const hasZone = raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw);
+      const normalized = hasZone ? raw : raw + "Z";
+      const parsed = new Date(normalized);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    function formatTime(raw) {
+      const d = parseApiTimestamp(raw);
+      return d ? d.toLocaleTimeString() : "-";
+    }
+
+    function severityClass(sev) {
+      const s = (sev || "").toLowerCase();
+      if (s === "critical") return "critical";
+      if (s === "high") return "high";
+      return "low";
+    }
+
+    function statusClass(status) {
+      const s = (status || "").toLowerCase();
+      if (s === "approved") return "approved";
+      if (s === "escalated" || s === "rejected") return "rejected";
+      return "pending";
+    }
+
+    function safeJsonParse(value, fallback) {
+      if (typeof value !== "string") return fallback;
+      try {
+        return JSON.parse(value);
+      } catch (_) {
+        return fallback;
+      }
+    }
+
+    function actionLabel(action) {
+      return (action || "no_action").replaceAll("_", " ");
+    }
+
+    function makeNarrative(incidents, metrics, pendingCount) {
+      if (!incidents.length) {
+        return "The system is healthy right now. No active incidents were detected in the latest monitoring windows.";
+      }
+      const latest = incidents[0];
+      const sev = (latest.severity || "low").toUpperCase();
+      const action = latest.action ? actionLabel(latest.action) : "an escalation path";
+      const confidence = Number(latest.confidence || 0).toFixed(2);
+      const approved = incidents.filter(i => (i.status || "").toLowerCase() === "approved").length;
+      const rejected = incidents.filter(i => (i.status || "").toLowerCase() === "escalated").length;
+
+      return `Latest situation: ${latest.service} is under ${sev} stress. AI proposed ${action} at confidence ${confidence}. Today we processed ${metrics.total_incidents || 0} incidents with ${approved} approvals, ${rejected} escalations, and ${pendingCount} pending human reviews.`;
+    }
+
+    async function refreshMetricsAndNarrative(context) {
+      const metrics = context.metrics;
+      const incidents = context.incidents;
+      const pending = context.pending;
+
+      const total = Number(metrics.total_incidents || 0);
+      const approved = incidents.filter(i => (i.status || "").toLowerCase() === "approved").length;
+      const rejected = incidents.filter(i => (i.status || "").toLowerCase() === "escalated").length;
+
+      document.getElementById("mTotal").textContent = String(total);
+      document.getElementById("mApproved").textContent = String(approved);
+      document.getElementById("mRejected").textContent = String(rejected);
+      document.getElementById("mPending").textContent = String(pending.length);
+      document.getElementById("mConfidence").textContent = Number(metrics.avg_confidence || 0).toFixed(2);
+
+      const resolved = Number(metrics.auto_resolved || 0);
+      const resolvedPct = total > 0 ? Math.round((resolved / total) * 100) : 0;
+      document.getElementById("mResolved").textContent = resolvedPct + "%";
+
+      document.getElementById("executiveNarrative").textContent = makeNarrative(incidents, metrics, pending.length);
+    }
+
+    async function refreshTimeline(incidents) {
+      const holder = document.getElementById("timeline");
+      holder.innerHTML = "";
+
+      if (!incidents.length) {
+        holder.innerHTML = '<div class="muted">No incident narratives available yet.</div>';
+        return;
+      }
+
+      for (const row of incidents.slice(0, 10)) {
+        const proposals = await fetchIncidentProposal(row.incident_id);
+        const latestProposal = proposals[0] || null;
+        const rationale = latestProposal && latestProposal.risk_rationale
+          ? latestProposal.risk_rationale
+          : "No model rationale available for this incident.";
+
+        const status = row.status || "Pending";
+        const service = row.service || "unknown-service";
+        const action = row.action ? actionLabel(row.action) : "manual investigation";
+        const confidence = Number(row.confidence || 0).toFixed(2);
+
+        const el = document.createElement("article");
+        el.className = "timeline-item";
+        el.innerHTML = `
+          <div class="item-top">
+            <span class="incident-title">${formatTime(row.timestamp)} • ${service}</span>
+            <span class="badge ${severityClass(row.severity)}">${(row.severity || "low").toUpperCase()}</span>
+          </div>
+          <div class="incident-body">
+            Situation: ${row.anomaly_summary || "An anomaly was detected."}<br>
+            AI Recommendation: ${action} at confidence ${confidence}.<br>
+            Human Decision: <span class="badge ${statusClass(status)}">${status}</span>
+          </div>
+          <div class="muted" style="margin-top:8px;">Model context: ${rationale}</div>
+        `;
+        holder.appendChild(el);
+      }
+    }
+
+    async function fetchIncidentProposal(incidentId) {
+      if (!incidentId) return [];
+      try {
+        return await fetchJson(`/incidents/${incidentId}/proposal`);
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function refreshFeed(incidents) {
+      const tbody = document.getElementById("feed");
+      tbody.innerHTML = "";
+      for (const r of incidents.slice(0, 20)) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${formatTime(r.timestamp)}</td>
+          <td>${r.service || "-"}</td>
+          <td><span class="badge ${severityClass(r.severity)}">${(r.severity || "low").toUpperCase()}</span></td>
+          <td>${actionLabel(r.action)}</td>
+          <td><span class="badge ${statusClass(r.status)}">${r.status || "Pending"}</span></td>
+          <td>${Number(r.confidence || 0).toFixed(2)}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function approvalHtml(pending) {
+      if (!pending.length) {
+        return "No pending approvals right now.";
+      }
+      const p = pending[0];
+      const rollback = safeJsonParse(p.rollback_params, p.rollback_params || "{}");
+      const params = safeJsonParse(p.action_params, p.action_params || "{}");
+
+      return `
+        <div class="approve-card">
+          <div><strong>Proposal</strong>: ${p.id}</div>
+          <div><strong>Action</strong>: ${actionLabel(p.action)}</div>
+          <div><strong>Confidence</strong>: ${Number(p.confidence_score || 0).toFixed(2)}</div>
+          <div><strong>Action Parameters</strong>: <code>${JSON.stringify(params)}</code></div>
+          <div><strong>Rollback</strong>: ${p.rollback_action} <code>${JSON.stringify(rollback)}</code></div>
+          <div class="rationale"><strong>AI Rationale</strong>: ${p.risk_rationale || "No rationale available."}</div>
+          <div class="actions">
+            <button class="btn btn-approve" onclick="approveProposal('${p.id}')">Approve</button>
+            <button class="btn btn-reject" onclick="rejectProposal('${p.id}')">Reject</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function refreshPending(pending) {
+      document.getElementById("approvalContent").innerHTML = approvalHtml(pending);
+    }
+
+    function escalationHtml(escalations) {
+      if (!escalations.length) {
+        return "No escalations in queue.";
+      }
+
+      return escalations.slice(0, 6).map((e) => {
+        const owner = e.assignee || "Unassigned";
+        const workstream = e.workstream || "general";
+        const statusBadge = statusClass(e.status === "resolved" ? "approved" : (e.status === "open" ? "pending" : "escalated"));
+        return `
+          <div class="timeline-item" style="margin-bottom:8px;">
+            <div class="item-top">
+              <span class="incident-title">Escalation ${e.id.slice(0, 8)}</span>
+              <span class="badge ${statusBadge}">${e.status}</span>
+            </div>
+            <div class="incident-body">
+              <strong>Incident:</strong> ${e.incident_id}<br>
+              <strong>Owner:</strong> ${owner}<br>
+              <strong>Workstream:</strong> ${workstream}<br>
+              <strong>Reason:</strong> ${e.reason}
+            </div>
+            <div class="actions" style="margin-top:8px;">
+              <button class="btn" style="background:#1b6bb3;color:#fff;" onclick="assignEscalation('${e.id}')">Assign</button>
+              <button class="btn" style="background:#7a5c13;color:#fff;" onclick="logEscalation('${e.id}')">Add Log</button>
+              <button class="btn" style="background:#4f4f66;color:#fff;" onclick="showEscalationContext('${e.id}')">What Broke?</button>
+              <button class="btn btn-approve" onclick="resolveEscalation('${e.id}')">Resolve</button>
+            </div>
+            <div id="esc-context-${e.id}" class="detail-box" style="display:none;"></div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function refreshEscalations(escalations) {
+      document.getElementById("escalationContent").innerHTML = escalationHtml(escalations);
+    }
+
+    function updateLearningInsights(curve, incidents) {
+      const rewards = curve.rewards || [];
+      const confidence = curve.confidence || [];
+      const samples = rewards.length;
+      const avgReward = samples ? rewards.reduce((a, b) => a + Number(b || 0), 0) / samples : 0;
+      const avgConf = confidence.length ? confidence.reduce((a, b) => a + Number(b || 0), 0) / confidence.length : 0;
+      const approvals = incidents.filter(i => (i.status || "").toLowerCase() === "approved").length;
+      const decisions = incidents.filter(i => ["approved", "escalated"].includes((i.status || "").toLowerCase())).length;
+      const approvalRate = decisions ? (approvals / decisions) * 100 : 0;
+
+      const insights = [
+        `Training samples observed: ${samples}.`,
+        `Average reward trend: ${avgReward.toFixed(3)}.`,
+        `Average confidence trend: ${avgConf.toFixed(2)}.`,
+        `Human approval acceptance rate: ${approvalRate.toFixed(0)}%.`,
+      ];
+
+      document.getElementById("learningInsights").innerHTML = insights
+        .map(text => `<div class="insight-item">${text}</div>`)
+        .join("");
+    }
+
+    function refreshChart(curve) {
+      const labels = curve.episodes || [];
+      const rewards = curve.rewards || [];
+      const confidence = curve.confidence || [];
+      const ctx = document.getElementById("learningChart").getContext("2d");
+
+      if (!chart) {
+        chart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels,
+            datasets: [
+              {
+                label: "Reward",
+                data: rewards,
+                borderColor: "#1b6bb3",
+                backgroundColor: "rgba(27,107,179,0.16)",
+                fill: true,
+                tension: 0.25,
+                yAxisID: "y1",
+              },
+              {
+                label: "Confidence",
+                data: confidence,
+                borderColor: "#c56e13",
+                backgroundColor: "rgba(197,110,19,0.12)",
+                fill: true,
+                tension: 0.25,
+                yAxisID: "y2",
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { labels: { boxWidth: 10, usePointStyle: true } },
+            },
+            scales: {
+              y1: {
+                position: "left",
+                min: -1,
+                max: 1,
+                grid: { color: "rgba(16,33,47,0.08)" },
+                title: { display: true, text: "Reward" },
+              },
+              y2: {
+                position: "right",
+                min: 0,
+                max: 1,
+                grid: { drawOnChartArea: false },
+                title: { display: true, text: "Confidence" },
+              },
+              x: { grid: { color: "rgba(16,33,47,0.06)" } },
+            },
+          },
+        });
+      } else {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = rewards;
+        chart.data.datasets[1].data = confidence;
+        chart.update();
+      }
+    }
+
+    async function approveProposal(id) {
+      try {
+        await fetchJson(`/proposals/${id}/approve`, { method: "POST" });
+        await tick();
+      } catch (err) {
+        alert("Approve failed. Check API key and server auth settings.\n" + err.message);
+      }
+    }
+
+    async function rejectProposal(id) {
+      try {
+        await fetchJson(`/proposals/${id}/reject`, { method: "POST" });
+        await tick();
+      } catch (err) {
+        alert("Reject failed. Check API key and server auth settings.\n" + err.message);
+      }
+    }
+
+    async function triggerAnalysis() {
+      try {
+        await fetchJson("/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force_human_review: true }),
+        });
+        await tick();
+      } catch (err) {
+        alert("Trigger failed. Check API key and server auth settings.\n" + err.message);
+      }
+    }
+
+    async function assignEscalation(id) {
+      const assignee = window.prompt("Assign to (name or email):");
+      if (!assignee) return;
+      const assignedBy = window.prompt("Assigned by:", "sre-lead") || "sre-lead";
+      const workstream = window.prompt("Workstream (code/cloud/db/network):", "ops") || "ops";
+      const note = window.prompt("Assignment note:", "Assigned for manual remediation.") || "Assigned for manual remediation.";
+
+      try {
+        await fetchJson(`/escalations/${id}/assign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ assignee, assigned_by: assignedBy, workstream, note }),
+        });
+        await tick();
+      } catch (err) {
+        alert("Assign failed. Check API key and endpoint availability.\n" + err.message);
+      }
+    }
+
+    async function logEscalation(id) {
+      const author = window.prompt("Log author:", "sre-engineer") || "sre-engineer";
+      const note = window.prompt("Progress update:");
+      if (!note) return;
+      const phase = window.prompt("Phase (investigation/fix/verification/update):", "update") || "update";
+
+      try {
+        await fetchJson(`/escalations/${id}/log`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ author, note, phase, metadata: {} }),
+        });
+        await tick();
+      } catch (err) {
+        alert("Log update failed.\n" + err.message);
+      }
+    }
+
+    async function resolveEscalation(id) {
+      const resolvedBy = window.prompt("Resolved by:", "sre-engineer") || "sre-engineer";
+      const resolutionSummary = window.prompt("Resolution summary (what was fixed):");
+      if (!resolutionSummary) return;
+      const outcome = window.prompt("Outcome (resolved/workaround/blocked):", "resolved") || "resolved";
+
+      try {
+        await fetchJson(`/escalations/${id}/resolve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resolved_by: resolvedBy, resolution_summary: resolutionSummary, outcome }),
+        });
+        await tick();
+      } catch (err) {
+        alert("Resolve failed.\n" + err.message);
+      }
+    }
+
+    async function showEscalationContext(id) {
+      const holder = document.getElementById(`esc-context-${id}`);
+      if (!holder) return;
+
+      if (holder.style.display === "block") {
+        holder.style.display = "none";
+        holder.innerHTML = "";
+        return;
+      }
+
+      try {
+        const ctx = await fetchJson(`/escalations/${id}/context`);
+        const incident = ctx.incident || {};
+        const proposal = ctx.proposal || {};
+        const logs = ctx.worklog || [];
+        const checks = (ctx.recommended_investigation || [])
+          .map((item) => `<li>${item}</li>`)
+          .join("");
+        const recentLog = logs.length ? logs[0] : null;
+
+        holder.innerHTML = `
+          <strong>What broke:</strong> ${ctx.what_broke || "Unknown incident symptom."}<br>
+          <strong>Service:</strong> ${incident.service || "unknown"} • <strong>Severity:</strong> ${(incident.severity || "-").toUpperCase()}<br>
+          <strong>AI suggested:</strong> ${proposal.action ? proposal.action.replaceAll("_", " ") : "manual investigation"}<br>
+          <strong>Rationale:</strong> ${proposal.risk_rationale || "No rationale captured."}<br>
+          <strong>Fix checklist:</strong>
+          <ol>${checks}</ol>
+          <strong>Latest worklog:</strong> ${recentLog ? `${recentLog.author} (${recentLog.phase}) - ${recentLog.note}` : "No operator log yet."}
+        `;
+        holder.style.display = "block";
+      } catch (err) {
+        holder.innerHTML = "Could not load escalation context. Please retry.";
+        holder.style.display = "block";
+      }
+    }
+
+    async function loadContext() {
+      const [metrics, incidents, pending, escalations] = await Promise.all([
+        fetchJson("/metrics"),
+        fetchJson("/incidents?n=25"),
+        fetchJson("/proposals/pending"),
+        fetchJson("/escalations?limit=50"),
+      ]);
+      return { metrics, incidents, pending, escalations };
+    }
+
+    async function tick() {
+      if (polling) return;
+      polling = true;
+      document.getElementById("statusDot").classList.add("live");
+      document.getElementById("statusText").textContent = "live sync";
+
+      try {
+        const context = await loadContext();
+        await refreshMetricsAndNarrative(context);
+        refreshFeed(context.incidents);
+        refreshPending(context.pending);
+        refreshEscalations(context.escalations || []);
+        await refreshTimeline(context.incidents);
+
+        if (tickCount % 2 === 0) {
+          const curve = await fetchJson("/metrics/learning-curve");
+          refreshChart(curve);
+          updateLearningInsights(curve, context.incidents);
+        }
+        tickCount += 1;
+      } catch (err) {
+        document.getElementById("statusDot").classList.remove("live");
+        document.getElementById("statusText").textContent = "sync error";
+        document.getElementById("executiveNarrative").textContent = "Dashboard is reachable but could not fetch API data. Check server status and authentication settings.";
+      } finally {
+        polling = false;
+      }
+    }
+
+    document.getElementById("triggerSafe").addEventListener("click", triggerAnalysis);
+    tick();
+    setInterval(tick, 7000);
+  </script>
+</body>
+</html>
